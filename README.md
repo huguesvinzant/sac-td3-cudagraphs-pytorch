@@ -40,7 +40,7 @@ Avoid Mambaforge as it is deprecated as of July 2024.
 #### Step 3: Create a New Conda Environment
 
 ```bash
-conda create -n sac_td3_cuda python=3.8
+conda create -n sac_td3_cuda python=3.10
 conda activate sac_td3_cuda
 ```
 
@@ -48,7 +48,7 @@ conda activate sac_td3_cuda
 
 Install PyTorch in accordance to your OS. For Linux with CUDA 12.1, run:
 ```bash
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 #### Step 5: Install Other Dependencies

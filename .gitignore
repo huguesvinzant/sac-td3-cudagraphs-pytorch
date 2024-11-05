@@ -209,12 +209,13 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/macos,python
 
 # Custom
-logs/
-checkpoints/
+log/
+checkpoint/
 spawn/
 tmux/
 wandb/
 plots/
+.vscode/
 *.png
 tasks/autogen
 

@@ -5,7 +5,8 @@ omegaconf
 numpy
 tmuxp
 wandb
-gymnasium
+gymnasium==0.29.1
 dm_control
 tensordict-nightly
 torchrl-nightly
+imageio
