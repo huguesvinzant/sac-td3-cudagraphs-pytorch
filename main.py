@@ -12,10 +12,12 @@ from torchrl.data import LazyTensorStorage, TensorDictReplayBuffer
 
 from gymnasium.core import Env
 
-import orchestrator
+import off_policy_orchestrator
+import on_policy_orchestrator
 from helpers import logger
 from helpers.env_makers import make_env
-from agents.agent import Agent
+from agents.off_policy_agent import OffPolicyAgent
+from agents.on_policy_agent import OnPolicyAgent
 
 
 os.environ["TORCHDYNAMO_INLINE_INBUILT_NN_MODULES"] = "1"
@@ -171,26 +173,50 @@ class MagicRunner(object):
             ),
         )
 
-        @beartype
-        def agent_wrapper() -> Agent:
-            return Agent(
-                net_shapes=net_shapes,
-                min_ac=min_ac,
-                max_ac=max_ac,
-                device=device,
-                hps=self._cfg,
-                generator=generator,
-                rb=rb,
+        if self._cfg.policy: # On-policy
+            @beartype
+            def agent_wrapper() -> OnPolicyAgent:
+                return OnPolicyAgent(
+                    net_shapes=net_shapes,
+                    min_ac=min_ac,
+                    max_ac=max_ac,
+                    device=device,
+                    hps=self._cfg,
+                    generator=generator,
+                    rb=rb,
+                )
+
+            # train
+            on_policy_orchestrator.train(
+                cfg=self._cfg,
+                env=env,
+                eval_env=eval_env,
+                agent_wrapper=agent_wrapper,
+                name=self.name,
+            )
+        
+        else: # Off-policy
+            @beartype
+            def agent_wrapper() -> OffPolicyAgent:
+                return OffPolicyAgent(
+                    net_shapes=net_shapes,
+                    min_ac=min_ac,
+                    max_ac=max_ac,
+                    device=device,
+                    hps=self._cfg,
+                    generator=generator,
+                    rb=rb,
+                )
+
+            # train
+            off_policy_orchestrator.train(
+                cfg=self._cfg,
+                env=env,
+                eval_env=eval_env,
+                agent_wrapper=agent_wrapper,
+                name=self.name,
             )
 
-        # train
-        orchestrator.train(
-            cfg=self._cfg,
-            env=env,
-            eval_env=eval_env,
-            agent_wrapper=agent_wrapper,
-            name=self.name,
-        )
 
         # cleanup
         env.close()
@@ -226,25 +252,47 @@ class MagicRunner(object):
         )
         assert isinstance(env, Env), "no vecenv allowed here"
 
-        # agent
-        @beartype
-        def agent_wrapper() -> Agent:
-            return Agent(
-                net_shapes=net_shapes,
-                min_ac=min_ac,
-                max_ac=max_ac,
-                device=device,
-                hps=self._cfg,
-                generator=generator,
+        if self._cfg.policy: # On-policy
+            # agent
+            @beartype
+            def agent_wrapper() -> OnPolicyAgent:
+                return OnPolicyAgent(
+                    net_shapes=net_shapes,
+                    min_ac=min_ac,
+                    max_ac=max_ac,
+                    device=device,
+                    hps=self._cfg,
+                    generator=generator,
+                )
+
+            # evaluate
+            on_policy_orchestrator.evaluate(
+                cfg=self._cfg,
+                env=env,
+                agent_wrapper=agent_wrapper,
+                name=self.name,
             )
 
-        # evaluate
-        orchestrator.evaluate(
-            cfg=self._cfg,
-            env=env,
-            agent_wrapper=agent_wrapper,
-            name=self.name,
-        )
+        else: # Off-policy
+            # agent
+            @beartype
+            def agent_wrapper() -> OffPolicyAgent:
+                return OffPolicyAgent(
+                    net_shapes=net_shapes,
+                    min_ac=min_ac,
+                    max_ac=max_ac,
+                    device=device,
+                    hps=self._cfg,
+                    generator=generator,
+                )
+
+            # evaluate
+            off_policy_orchestrator.evaluate(
+                cfg=self._cfg,
+                env=env,
+                agent_wrapper=agent_wrapper,
+                name=self.name,
+            )
 
         # cleanup
         env.close()

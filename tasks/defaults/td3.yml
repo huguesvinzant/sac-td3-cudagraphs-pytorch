@@ -1,3 +1,6 @@
+# general
+policy: false
+
 # resources
 cuda: true
 compile: false

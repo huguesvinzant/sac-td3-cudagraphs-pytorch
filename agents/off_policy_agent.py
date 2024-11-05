@@ -18,7 +18,7 @@ from helpers import logger
 from agents.nets import log_module_info, Actor, TanhGaussActor, Critic
 
 
-class Agent(object):
+class OffPolicyAgent(object):
 
     @beartype
     def __init__(self,

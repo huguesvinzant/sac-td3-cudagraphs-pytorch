@@ -21,7 +21,7 @@ from gymnasium.core import Env
 from gymnasium.vector.vector_env import VectorEnv
 
 from helpers import logger
-from agents.agent import Agent
+from agents.off_policy_agent import OffPolicyAgent
 
 
 @contextmanager
@@ -40,7 +40,7 @@ def timed(op: str, timer: Callable[[], float]):
 
 @beartype
 def segment(env: Union[Env, VectorEnv],
-            agent: Agent,
+            agent: OffPolicyAgent,
             seed: int,
             segment_len: int,
             learning_starts: int,
@@ -119,7 +119,7 @@ def segment(env: Union[Env, VectorEnv],
 
 @beartype
 def episode(env: Env,
-            agent: Agent,
+            agent: OffPolicyAgent,
             seed: int,
             *,
             need_lists: bool = False,
@@ -218,7 +218,7 @@ def episode(env: Env,
 def train(cfg: DictConfig,
           env: Union[Env, VectorEnv],
           eval_env: Env,
-          agent_wrapper: Callable[[], Agent],
+          agent_wrapper: Callable[[], OffPolicyAgent],
           name: str):
 
     assert isinstance(cfg, DictConfig)
@@ -392,7 +392,7 @@ def train(cfg: DictConfig,
 @beartype
 def evaluate(cfg: DictConfig,
              env: Env,
-             agent_wrapper: Callable[[], Agent],
+             agent_wrapper: Callable[[], OffPolicyAgent],
              name: str):
 
     assert isinstance(cfg, DictConfig)
