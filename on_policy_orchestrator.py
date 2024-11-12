@@ -325,47 +325,48 @@ def train(cfg: DictConfig,
         
         # minibatch update
         mini_batch_size = cfg.segment_len * cfg.num_envs // cfg.num_minibatches
-        indices = torch.randperm(len((agent.rb)))
-        for i in range(0, len(agent.rb), mini_batch_size):
-            batch_indices = indices[i:i + mini_batch_size]
-            batch = agent.rb[batch_indices]
-            _, newlogprob, entropy, newvalue = agent.predict(batch, batch["actions"])
-            logratio = newlogprob - batch["logprobs"]
-            ratio = logratio.exp()
+        for epoch in range(cfg.update_epochs):
+            indices = torch.randperm(len((agent.rb)))
+            for i in range(0, len(agent.rb), mini_batch_size):
+                batch_indices = indices[i:i + mini_batch_size]
+                batch = agent.rb[batch_indices]
+                _, newlogprob, entropy, newvalue = agent.predict(batch, batch["actions"])
+                logratio = newlogprob - batch["logprobs"]
+                ratio = logratio.exp()
 
-            # advantage normalization
-            mb_advantages = advantages[batch_indices]
-            if cfg.norm_adv:
-                mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                # advantage normalization
+                mb_advantages = advantages[batch_indices]
+                if cfg.norm_adv:
+                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-            # policy loss (clipped objective)
-            pg_loss1 = -mb_advantages * ratio
-            pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - cfg.clip_coef, 1 + cfg.clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                # policy loss (clipped objective)
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - cfg.clip_coef, 1 + cfg.clip_coef)
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-            # value loss clipping
-            if cfg.clip_vloss:
-                v_loss_unclipped = (newvalue - returns[batch_indices]) ** 2
-                v_clipped = batch["values"] + torch.clamp(
-                    newvalue - batch["values"],
-                    -cfg.clip_coef,
-                    cfg.clip_coef,
-                )
-                v_loss_clipped = (v_clipped - returns[batch_indices]) ** 2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                v_loss = 0.5 * v_loss_max.mean()
-            else:
-                v_loss = 0.5 * ((newvalue - returns[batch_indices]) ** 2).mean()
+                # value loss clipping
+                if cfg.clip_vloss:
+                    v_loss_unclipped = (newvalue - returns[batch_indices]) ** 2
+                    v_clipped = batch["values"] + torch.clamp(
+                        newvalue - batch["values"],
+                        -cfg.clip_coef,
+                        cfg.clip_coef,
+                    )
+                    v_loss_clipped = (v_clipped - returns[batch_indices]) ** 2
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    v_loss = 0.5 * ((newvalue - returns[batch_indices]) ** 2).mean()
 
-            # entropy loss
-            entropy_loss = entropy.mean()
-            loss = pg_loss - cfg.ent_coef * entropy_loss + v_loss * cfg.vf_coef
+                # entropy loss
+                entropy_loss = entropy.mean()
+                loss = pg_loss - cfg.ent_coef * entropy_loss + v_loss * cfg.vf_coef
 
-            agent.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(agent.actor.parameters(), cfg.max_grad_norm)
-            torch.nn.utils.clip_grad_norm_(agent.qnet.parameters(), cfg.max_grad_norm)
-            agent.optimizer.step()
+                agent.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(agent.actor.parameters(), cfg.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(agent.qnet.parameters(), cfg.max_grad_norm)
+                agent.optimizer.step()
 
         agent.rb.empty()
 

@@ -312,6 +312,7 @@ class PPOActor(nn.Module):
             ]))),
         ]))
         self.head = nn.Linear(hid_dims[1], ac_dim, device=device)
+        self.logstd = nn.Parameter(torch.zeros(1, ac_dim).to(device))
 
         # perform initialization
         self.fc_stack.apply(init(std=np.sqrt(2)))
@@ -320,8 +321,10 @@ class PPOActor(nn.Module):
     @beartype
     def forward(self, ob: torch.Tensor, action: torch.Tensor = None) -> torch.Tensor:
         x = self.fc_stack(ob)
-        logits = self.head(x)
-        probs = Categorical(logits=logits)
+        mean = self.head(x)
+        logstd = self.logstd.expand_as(mean)
+        std = torch.exp(logstd)
+        probs = Normal(mean, std)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy()
+        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1)
