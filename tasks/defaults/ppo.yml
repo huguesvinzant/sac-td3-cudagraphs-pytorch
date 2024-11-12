@@ -1,0 +1,50 @@
+# general
+policy: true
+
+# resources
+cuda: true
+compile: false
+cudagraphs: false
+
+# env
+sync_vec_env: true
+num_envs: 4 # the number of parallel game environments
+# action_repeat: 1
+capture_video: false # weather to capture videos of the agent performances
+normalize_observations: false
+
+# logging
+wandb_project: "calico" # the wandb's project name
+measure_burnin: 3
+
+# training mode
+num_timesteps: 2000000 # total timesteps of the experiments
+eval_steps: 10
+eval_every: 8192
+
+# evaluation mode
+# num_episodes: 16
+# gather_trajectories: true
+
+# model
+layer_norm: false
+
+# optimization
+lr: 3e-4 # the learning rate of the optimizer
+clip_norm: 0.
+
+# algorithm
+segment_len: 512 # the number of steps to run in each environment per policy rollout
+num_minibatches: 32 # the number of mini-batches
+gamma: 0.99 # the discount factor gamma
+anneal_lr: true # Toggle learning rate annealing for policy and value networks
+gae: true # Use GAE for advantage computation
+gae_lambda: 0.95 # the lambda for the general advantage estimation
+norm_adv: true # Toggles advantages normalization
+clip_coef: 0.2 # the surrogate clipping coefficient
+clip_vloss: true # Toggles whether or not to use a clipped loss for the value function, as per the paper
+ent_coef: 0.0 # coefficient of the entropy
+vf_coef: 0.5 # coefficient of the value function
+max_grad_norm: 0.5 # the maximum norm for the gradient clipping
+target_KL: None # the target KL divergence threshold
+rb_capacity: 1000000

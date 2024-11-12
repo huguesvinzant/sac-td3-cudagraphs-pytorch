@@ -178,11 +178,8 @@ class MagicRunner(object):
             def agent_wrapper() -> OnPolicyAgent:
                 return OnPolicyAgent(
                     net_shapes=net_shapes,
-                    min_ac=min_ac,
-                    max_ac=max_ac,
                     device=device,
                     hps=self._cfg,
-                    generator=generator,
                     rb=rb,
                 )
 

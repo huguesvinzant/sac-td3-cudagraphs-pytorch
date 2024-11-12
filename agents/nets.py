@@ -3,9 +3,11 @@ from typing import Callable, Union
 
 from beartype import beartype
 from einops import pack
+import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Normal
+from torch.distributions.categorical import Categorical
 
 from helpers import logger
 
@@ -32,13 +34,16 @@ def log_module_info(model: nn.Module):
 
 
 @beartype
-def init(constant_bias: float = 0.) -> Callable[[nn.Module], None]:
+def init(constant_bias: float = 0., std: float = None) -> Callable[[nn.Module], None]:
     """Perform orthogonal initialization"""
 
     def _init(m: nn.Module) -> None:
 
         if (isinstance(m, (nn.Conv2d, nn.Linear, nn.Bilinear))):
-            nn.init.orthogonal_(m.weight)
+            if std is not None:
+                nn.init.orthogonal_(m.weight, std)
+            else:
+                nn.init.orthogonal_(m.weight)
             if m.bias is not None:
                 nn.init.constant_(m.bias, constant_bias)
         elif (isinstance(m, (nn.BatchNorm2d, nn.LayerNorm))):
@@ -89,6 +94,46 @@ class Critic(nn.Module):
     def forward(self, ob: torch.Tensor, ac: torch.Tensor) -> torch.Tensor:
         x, _ = pack([ob, ac], "b *")
         x = self.fc_stack(x)
+        return self.head(x)
+
+
+class PPOCritic(nn.Module):
+
+    @beartype
+    def __init__(self,
+                 ob_shape: tuple[int, ...],
+                 hid_dims: tuple[int, int],
+                 *,
+                 layer_norm: bool,
+                 device: Union[str, torch.device]):
+        super().__init__()
+        ob_dim = ob_shape[-1]
+        self.layer_norm = layer_norm
+
+        # assemble the last layers and output heads
+        self.fc_stack = nn.Sequential(OrderedDict([
+            ("fc_block_1", nn.Sequential(OrderedDict([
+                ("fc", nn.Linear(ob_dim, hid_dims[0], device=device)),
+                ("ln", (nn.LayerNorm if self.layer_norm else nn.Identity)(hid_dims[0],
+                                                                          device=device)),
+                ("nl", nn.Tanh()),
+            ]))),
+            ("fc_block_2", nn.Sequential(OrderedDict([
+                ("fc", nn.Linear(hid_dims[0], hid_dims[1], device=device)),
+                ("ln", (nn.LayerNorm if self.layer_norm else nn.Identity)(hid_dims[1],
+                                                                          device=device)),
+                ("nl", nn.Tanh()),
+            ]))),
+        ]))
+        self.head = nn.Linear(hid_dims[1], 1, device=device)
+
+        # perform initialization
+        self.fc_stack.apply(init(std=np.sqrt(2)))
+        self.head.apply(init(std=1.))
+
+    @beartype
+    def forward(self, ob: torch.Tensor) -> torch.Tensor:
+        x = self.fc_stack(ob)
         return self.head(x)
 
 
@@ -234,3 +279,49 @@ class TanhGaussActor(nn.Module):
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return {"sample": action, "log_prob": log_prob, "mode": mean}
+
+
+class PPOActor(nn.Module):
+
+    @beartype
+    def __init__(self,
+                 ob_shape: tuple[int, ...],
+                 ac_shape: tuple[int, ...],
+                 hid_dims: tuple[int, int],
+                 *,
+                 layer_norm: bool,
+                 device: Union[str, torch.device]):
+        super().__init__()
+        ob_dim = ob_shape[-1]
+        ac_dim = ac_shape[-1]
+        self.layer_norm = layer_norm
+
+        # assemble the last layers and output heads
+        self.fc_stack = nn.Sequential(OrderedDict([
+            ("fc_block_1", nn.Sequential(OrderedDict([
+                ("fc", nn.Linear(ob_dim, hid_dims[0], device=device)),
+                ("ln", (nn.LayerNorm if self.layer_norm else nn.Identity)(hid_dims[0],
+                                                                          device=device)),
+                ("nl", nn.Tanh()),
+            ]))),
+            ("fc_block_2", nn.Sequential(OrderedDict([
+                ("fc", nn.Linear(hid_dims[0], hid_dims[1], device=device)),
+                ("ln", (nn.LayerNorm if self.layer_norm else nn.Identity)(hid_dims[1],
+                                                                          device=device)),
+                ("nl", nn.Tanh()),
+            ]))),
+        ]))
+        self.head = nn.Linear(hid_dims[1], ac_dim, device=device)
+
+        # perform initialization
+        self.fc_stack.apply(init(std=np.sqrt(2)))
+        self.head.apply(init(std=0.01))
+
+    @beartype
+    def forward(self, ob: torch.Tensor, action: torch.Tensor = None) -> torch.Tensor:
+        x = self.fc_stack(ob)
+        logits = self.head(x)
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return action, probs.log_prob(action), probs.entropy()
