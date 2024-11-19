@@ -46,33 +46,20 @@ class OnPolicyAgent(object):
         # replay buffer
         self.rb = rb
 
-        # create online and target nets
+        # create actor nets
 
         actor_net_args = [ob_shape, ac_shape, (64, 64)]
         actor_net_kwargs = {"layer_norm": self.hps.layer_norm}
-
+        # online actor network
         self.actor = PPOActor(*actor_net_args, **actor_net_kwargs, device=self.device)
-        self.actor_params = TensorDict.from_module(self.actor, as_module=True)
-        self.actor_target = self.actor_params.data.clone()
+        # inference actor network
+        self.actor_detach = TensorDict.from_module(self.actor, as_module=True).to_module(PPOActor(*actor_net_args, **actor_net_kwargs, device=self.device))
 
-        # discard params of net
-        self.actor = PPOActor(*actor_net_args, **actor_net_kwargs, device="meta")
-        self.actor_params.to_module(self.actor)
-        # self.actor_detach = PPOActor(*actor_net_args, **actor_net_kwargs, device=self.device)
-
-        # # copy params to actor_detach without grad
-        # TensorDict.from_module(self.actor).data.to_module(self.actor_detach)
-
+        # create critic net
+        
         qnet_net_args = [ob_shape, (64, 64)]
         qnet_net_kwargs = {"layer_norm": self.hps.layer_norm}
-
         self.qnet = PPOCritic(*qnet_net_args, **qnet_net_kwargs, device=self.device)
-        self.qnet_params = TensorDict.from_module(self.qnet, as_module=True)
-        self.qnet_target = self.qnet_params.data.clone()
-
-        # discard params of net
-        self.qnet = PPOCritic(*qnet_net_args, **qnet_net_kwargs, device="meta")
-        self.qnet_params.to_module(self.qnet)
 
         # set up the optimizers
 
@@ -94,16 +81,6 @@ class OnPolicyAgent(object):
         out_actions, log_probs, ent = self.actor(obs, action)
         q_values = self.qnet(obs)
         return out_actions, log_probs, ent, q_values
-
-        if (self.hps.prefer_td3_over_sac or (
-            self.qnet_updates_so_far % self.hps.crit_targ_update_freq == 0)):
-
-            # lerp is defined as x' = x + w (y-x), which is equivalent to x' = (1-w) x + w y
-
-            self.qnet_target.lerp_(self.qnet_params.data, self.hps.polyak)
-            if self.hps.prefer_td3_over_sac:
-                # using TD3 (SAC does not use a target actor)
-                self.actor_target.lerp_(self.actor_params.data, self.hps.polyak)
 
     @beartype
     def save(self, path: Path, sfx: Optional[str] = None):
