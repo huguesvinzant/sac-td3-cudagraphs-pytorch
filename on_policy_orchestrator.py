@@ -57,7 +57,7 @@ def segment(env: Union[Env, VectorEnv],
     while True:
         with torch.no_grad():
             # predict action
-            actions, log_probs, ent, q_values = agent.predict(
+            actions, log_probs, _, q_values = agent.predict(
                 TensorDict(
                     {
                         "observations": obs,
@@ -65,9 +65,6 @@ def segment(env: Union[Env, VectorEnv],
                     device=agent.device,
                 ),
             )
-
-        if t > 0 and t % segment_len == 0:
-            yield
 
         # interact with env
         next_obs, rewards, terminations, truncations, infos = env.step(actions.cpu().numpy())
@@ -99,7 +96,6 @@ def segment(env: Union[Env, VectorEnv],
                     "terminations": terminations,
                     "logprobs": log_probs,
                     "values": q_values,
-                    "entropy": ent
                 },
                 batch_size=obs.shape[0],
                 device=agent.device,
@@ -109,6 +105,9 @@ def segment(env: Union[Env, VectorEnv],
         obs = next_obs
 
         t += 1
+
+        if t > 0 and t % segment_len == 0:
+            yield
 
 
 @beartype
@@ -252,8 +251,7 @@ def train(cfg: DictConfig,
     logger.info("wandb co established!")
 
     # create segment generator for training
-    seg_gen = segment(
-        env, agent, cfg.seed, cfg.segment_len)
+    seg_gen = segment(env, agent, cfg.seed, cfg.segment_len)
     # create episode generator for evaluating
     ep_gen = episode(eval_env, agent, cfg.seed)
 
@@ -300,27 +298,23 @@ def train(cfg: DictConfig,
 
         with torch.no_grad():
             envs_indices = [list(range(k, k + cfg.num_envs)) for k in range(cfg.segment_len * cfg.num_envs - cfg.num_envs, -1, -cfg.num_envs)]
+            nextvalue = agent.qnet(agent.rb["next_observations"][-1]).reshape(-1, 1)
             if cfg.gae:
                 advantages = torch.zeros_like(agent.rb["rewards"])
                 lastgaelam = 0
                 for t in envs_indices:
                     nextnonterminal = ~agent.rb["terminations"][t]
-                    nextvalues = agent.rb["values"][t]
-                    delta = agent.rb["rewards"][t] + cfg.gamma * nextvalues * nextnonterminal - agent.rb["values"][t]
+                    delta = agent.rb["rewards"][t] + cfg.gamma * nextvalue * nextnonterminal - agent.rb["values"][t]
                     advantages[t] = lastgaelam = delta + cfg.gamma * cfg.gae_lambda * nextnonterminal * lastgaelam
+                    nextvalue = agent.rb["values"][t]
                 returns = advantages + agent.rb["values"]
             else:
-                last_item = True
                 returns = torch.zeros_like(agent.rb["rewards"]).to(cfg.device)
                 for t in envs_indices:
                     nextnonterminal = ~agent.rb["terminations"][t]
-                    if last_item:
-                        next_return = agent.rb["values"][t]
-                        last_item = False
-                    else:
-                        next_indices = [k + cfg.num_envs for k in t]
-                        next_return = agent.rb["values"][next_indices]
+                    next_return = nextvalue
                     returns[t] = agent.rb["rewards"][t] + cfg.gamma * nextnonterminal * next_return
+                    nextvalue = returns[t]
                 advantages = returns - agent.rb["values"]
         
         # minibatch update

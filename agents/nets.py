@@ -319,12 +319,12 @@ class PPOActor(nn.Module):
         self.head.apply(init(std=0.01))
 
     @beartype
-    def forward(self, ob: torch.Tensor, action: torch.Tensor = None) -> tuple[torch.Tensor]:
+    def forward(self, ob: torch.Tensor, actions: torch.Tensor = None) -> tuple[torch.Tensor]:
         x = self.fc_stack(ob)
         mean = self.head(x)
         logstd = self.logstd.expand_as(mean)
         std = torch.exp(logstd)
         probs = Normal(mean, std)
-        if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1)
+        if actions is None:
+            actions = probs.sample()
+        return actions, probs.log_prob(actions).sum(1), probs.entropy().sum(1)
