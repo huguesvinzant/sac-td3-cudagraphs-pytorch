@@ -11,21 +11,22 @@ sync_vec_env: true
 num_envs: 1 # the number of parallel game environments
 # action_repeat: 1
 capture_video: false # weather to capture videos of the agent performances
-normalize_observations: false
+normalize_observations: true
+normalize_reward: true
 
 # logging
 wandb_project: "calico" # the wandb's project name
 measure_burnin: 3
 
 # training mode
-num_timesteps: 2000000 # total timesteps of the experiments
+num_timesteps: 10000000 # total timesteps of the experiments
 eval_steps: 10
 eval_every: 2048
 update_epochs: 10 # the K epochs to update the policy
 
 # evaluation mode
-# num_episodes: 16
-# gather_trajectories: true
+num_episodes: 16
+gather_trajectories: true
 
 # model
 layer_norm: false

@@ -154,6 +154,7 @@ class MagicRunner(object):
             self._cfg.env_id,
             self._cfg.seed,
             normalize_observations=self._cfg.normalize_observations,
+            normalize_reward=self._cfg.normalize_reward,
             sync_vec_env=self._cfg.sync_vec_env,
             num_envs=self._cfg.num_envs,
         )
@@ -161,6 +162,7 @@ class MagicRunner(object):
             self._cfg.env_id,
             self._cfg.seed,
             normalize_observations=self._cfg.normalize_observations,
+            normalize_reward=self._cfg.normalize_reward,
             sync_vec_env=True,
             num_envs=1,
             video_path=video_path,

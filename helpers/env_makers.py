@@ -12,8 +12,9 @@ from gymnasium.wrappers.record_episode_statistics import RecordEpisodeStatistics
 from gymnasium.vector.sync_vector_env import SyncVectorEnv
 from gymnasium.vector.async_vector_env import AsyncVectorEnv
 from gymnasium.wrappers.record_video import RecordVideo
-from gymnasium.wrappers.normalize import NormalizeObservation
+from gymnasium.wrappers.normalize import NormalizeObservation, NormalizeReward
 from gymnasium.wrappers.transform_observation import TransformObservation
+from gymnasium.wrappers.transform_reward import TransformReward 
 from gymnasium.wrappers.clip_action import ClipAction
 
 from gymnasium.spaces import Box
@@ -188,6 +189,7 @@ def make_env(env_id: str,
              seed: int,
              *,
              normalize_observations: bool,
+             normalize_reward: bool,
              sync_vec_env: bool,
              num_envs: int,
              video_path: Optional[Path] = None,
@@ -220,6 +222,9 @@ def make_env(env_id: str,
                 if normalize_observations:
                     env = NormalizeObservation(env)
                     env = TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+                if normalize_reward:
+                    env = NormalizeReward(env)
+                    env = TransformReward(env, lambda obs: np.clip(obs, -10, 10))
                 if horizon is not None:
                     env = TimeLimit(env, max_episode_steps=horizon)
             return env
