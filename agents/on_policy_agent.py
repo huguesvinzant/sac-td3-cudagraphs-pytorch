@@ -50,13 +50,10 @@ class OnPolicyAgent(object):
 
         actor_net_args = [ob_shape, ac_shape, (64, 64)]
         actor_net_kwargs = {"layer_norm": self.hps.layer_norm}
-        # online actor network
         self.actor = PPOActor(*actor_net_args, **actor_net_kwargs, device=self.device)
-        # inference actor network
-        self.actor_detach = TensorDict.from_module(self.actor, as_module=True).to_module(PPOActor(*actor_net_args, **actor_net_kwargs, device=self.device))
-
-        # create critic net
         
+        # create critic net
+
         qnet_net_args = [ob_shape, (64, 64)]
         qnet_net_kwargs = {"layer_norm": self.hps.layer_norm}
         self.qnet = PPOCritic(*qnet_net_args, **qnet_net_kwargs, device=self.device)

@@ -319,7 +319,7 @@ class PPOActor(nn.Module):
         self.head.apply(init(std=0.01))
 
     @beartype
-    def forward(self, ob: torch.Tensor, action: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, ob: torch.Tensor, action: torch.Tensor = None) -> tuple[torch.Tensor]:
         x = self.fc_stack(ob)
         mean = self.head(x)
         logstd = self.logstd.expand_as(mean)

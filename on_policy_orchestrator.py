@@ -142,16 +142,16 @@ def episode(env: Env,
     ob = torch.as_tensor(ob, device=agent.device, dtype=torch.float)
 
     while True:
-
-        # predict action
-        action, log_probs, ent, q_values = agent.predict(
-            TensorDict(
-                {
-                    "observations": ob,
-                },
-                device=agent.device,
-            ),
-        )
+        with torch.no_grad():
+            # predict action
+            action, log_probs, ent, q_values = agent.predict(
+                TensorDict(
+                    {
+                        "observations": ob,
+                    },
+                    device=agent.device,
+                ),
+            )
 
         new_ob, reward, termination, truncation, infos = env.step(action.cpu().numpy())
 
