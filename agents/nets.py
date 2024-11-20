@@ -327,4 +327,6 @@ class PPOActor(nn.Module):
         probs = Normal(mean, std)
         if actions is None:
             actions = probs.sample()
-        return actions, probs.log_prob(actions).sum(1), probs.entropy().sum(1)
+        log_prob = probs.log_prob(actions).sum(1).reshape(-1, 1)
+        entropy = probs.entropy().sum(1).reshape(-1, 1)
+        return actions, log_prob, entropy

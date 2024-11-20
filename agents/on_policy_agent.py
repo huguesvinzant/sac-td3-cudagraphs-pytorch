@@ -61,7 +61,7 @@ class OnPolicyAgent(object):
         # set up the optimizers
 
         self.optimizer = Adam(
-            self.qnet.parameters(),
+            list(self.qnet.parameters()) + list(self.actor.parameters()),
             lr=self.hps.lr,
             eps=1e-5,
             capturable=self.hps.cudagraphs and not self.hps.compile,
@@ -75,9 +75,9 @@ class OnPolicyAgent(object):
     def predict(self, in_td: TensorDict, action: torch.Tensor = None) -> np.ndarray:
         """Predict with policy"""
         obs = in_td["observations"]
-        out_actions, log_probs, ent = self.actor(obs, action)
+        out_actions, log_prob, entropy = self.actor(obs, action)
         q_values = self.qnet(obs)
-        return out_actions, log_probs, ent, q_values
+        return out_actions, log_prob, entropy, q_values
 
     @beartype
     def save(self, path: Path, sfx: Optional[str] = None):
