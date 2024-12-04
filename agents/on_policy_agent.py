@@ -34,8 +34,7 @@ class OnPolicyAgent(object):
         self.hps = hps
 
         self.timesteps_so_far = 0
-        self.actor_updates_so_far = 0
-        self.qnet_updates_so_far = 0
+        self.updates_so_far = 0
 
         self.best_eval_ep_ret = -float("inf")  # updated in orchestrator
 
@@ -170,3 +169,95 @@ class OnPolicyAgent(object):
             # load the agent stored in this file
             self.load_from_disk(tmp_file_path)
             logger.warn("model loaded")
+
+    @beartype
+    def advantage_estimation(self):
+        """Compute the advantage estimation and store it in the replay buffer"""
+        envs_indices = [list(range(k, k + self.hps.num_envs)) for k in range(self.hps.segment_len * self.hps.num_envs - self.hps.num_envs, -1, -self.hps.num_envs)]
+        nextvalue = self.qnet(self.rb["next_observations"][-1]).reshape(-1, 1)
+        if self.hps.gae:
+            advantages = torch.zeros_like(self.rb["rewards"])
+            lastgaelam = 0
+            for t in envs_indices:
+                nextnonterminal = ~self.rb["terminations"][t]
+                delta = self.rb["rewards"][t] + self.hps.gamma * nextvalue * nextnonterminal - self.rb["values"][t]
+                advantages[t] = lastgaelam = delta + self.hps.gamma * self.hps.gae_lambda * nextnonterminal * lastgaelam
+                nextvalue = self.rb["values"][t]
+            returns = advantages + self.rb["values"]
+        else:
+            returns = torch.zeros_like(self.rb["rewards"]).to(self.hps.device)
+            for t in envs_indices:
+                nextnonterminal = ~self.rb["terminations"][t]
+                next_return = nextvalue
+                returns[t] = self.rb["rewards"][t] + self.hps.gamma * nextnonterminal * next_return
+                nextvalue = returns[t]
+            advantages = returns - self.rb["values"]
+
+        self.rb.extend(
+            TensorDict(
+                {
+                    "advantages": advantages,
+                    "returns": returns,
+                },
+                batch_size=advantages.shape[0],
+                device=self.device,
+            )
+        )
+
+    @beartype
+    def update_nets(self, batch: TensorDict) -> TensorDict:
+        
+        _, newlogprob, entropy, newvalue = self.predict(batch, batch["actions"])
+        logratio = newlogprob - batch["logprobs"]
+        ratio = logratio.exp()
+
+        with torch.no_grad():
+            # calculate approx_kl http://joschu.net/blog/kl-approx.html
+            old_approx_kl = (-logratio).mean()
+            approx_kl = ((ratio - 1) - logratio).mean()
+
+        # advantage normalization
+        mb_advantages = batch["advantages"]
+        if self.hps.norm_adv:
+            mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+
+        # policy loss (clipped objective)
+        pg_loss1 = -mb_advantages * ratio
+        pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.hps.clip_coef, 1 + self.hps.clip_coef)
+        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+        # value loss clipping
+        if self.hps.clip_vloss:
+            v_loss_unclipped = (newvalue - batch["returns"]) ** 2
+            v_clipped = batch["values"] + torch.clamp(
+                newvalue - batch["values"],
+                -self.hps.clip_coef,
+                self.hps.clip_coef,
+            )
+            v_loss_clipped = (v_clipped - batch["returns"]) ** 2
+            v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+            v_loss = 0.5 * v_loss_max.mean()
+        else:
+            v_loss = 0.5 * ((newvalue - batch["returns"]) ** 2).mean()
+
+        # entropy loss
+        entropy_loss = entropy.mean()
+        loss = pg_loss - self.hps.ent_coef * entropy_loss + v_loss * self.hps.vf_coef
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.hps.max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.qnet.parameters(), self.hps.max_grad_norm)
+        self.optimizer.step()
+        self.updates_so_far += 1
+
+        return TensorDict(
+            {
+                "loss/policy_loss": pg_loss.detach(),
+                "loss/value_loss": v_loss.detach(),
+                "loss/entropy_loss": entropy_loss.detach(),
+                "loss/loss": loss.detach(),
+                "loss/old_approx_kl": old_approx_kl.detach(),
+                "loss/approx_kl": approx_kl.detach(),
+            },
+        )

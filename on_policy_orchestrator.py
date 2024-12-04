@@ -255,7 +255,7 @@ def train(cfg: DictConfig,
     # create episode generator for evaluating
     ep_gen = episode(eval_env, agent, cfg.seed)
 
-    i = 0
+    lr_updates = 0
     start_time = None
     measure_burnin = None
     pbar = tqdm.tqdm(range(cfg.num_timesteps))
@@ -268,14 +268,11 @@ def train(cfg: DictConfig,
     ret_buff = deque(maxlen=maxlen)
 
     mode = None
-    # tc_update_actor = agent.update_actor
-    # tc_update_qnets = agent.update_qnets
-    # if cfg.compile:
-    #     tc_update_actor = torch.compile(tc_update_actor, mode=mode)
-    #     tc_update_qnets = torch.compile(tc_update_qnets, mode=mode)
-    # if cfg.cudagraphs:
-    #     tc_update_actor = CudaGraphModule(tc_update_actor, in_keys=[], out_keys=[])
-    #     tc_update_qnets = CudaGraphModule(tc_update_qnets, in_keys=[], out_keys=[])
+    tc_update_nets = agent.update_nets
+    if cfg.compile:
+        tc_update_nets = torch.compile(tc_update_nets, mode=mode)
+    if cfg.cudagraphs:
+        tc_update_nets = CudaGraphModule(tc_update_nets, in_keys=[], out_keys=[])
 
     while agent.timesteps_so_far <= cfg.num_timesteps:
 
@@ -285,7 +282,7 @@ def train(cfg: DictConfig,
             measure_burnin = agent.timesteps_so_far
 
         if cfg.anneal_lr:
-            frac = 1.0 - i / num_updates
+            frac = 1.0 - lr_updates / num_updates
             lrnow = frac * cfg.lr
             agent.optimizer.param_groups[0]["lr"] = lrnow
 
@@ -296,27 +293,10 @@ def train(cfg: DictConfig,
 
         logger.info(("train").upper())
 
+        # advantage estimation
         with torch.no_grad():
-            envs_indices = [list(range(k, k + cfg.num_envs)) for k in range(cfg.segment_len * cfg.num_envs - cfg.num_envs, -1, -cfg.num_envs)]
-            nextvalue = agent.qnet(agent.rb["next_observations"][-1]).reshape(-1, 1)
-            if cfg.gae:
-                advantages = torch.zeros_like(agent.rb["rewards"])
-                lastgaelam = 0
-                for t in envs_indices:
-                    nextnonterminal = ~agent.rb["terminations"][t]
-                    delta = agent.rb["rewards"][t] + cfg.gamma * nextvalue * nextnonterminal - agent.rb["values"][t]
-                    advantages[t] = lastgaelam = delta + cfg.gamma * cfg.gae_lambda * nextnonterminal * lastgaelam
-                    nextvalue = agent.rb["values"][t]
-                returns = advantages + agent.rb["values"]
-            else:
-                returns = torch.zeros_like(agent.rb["rewards"]).to(cfg.device)
-                for t in envs_indices:
-                    nextnonterminal = ~agent.rb["terminations"][t]
-                    next_return = nextvalue
-                    returns[t] = agent.rb["rewards"][t] + cfg.gamma * nextnonterminal * next_return
-                    nextvalue = returns[t]
-                advantages = returns - agent.rb["values"]
-        
+            agent.advantage_estimation()
+
         # minibatch update
         mini_batch_size = cfg.segment_len * cfg.num_envs // cfg.num_minibatches
         for epoch in range(cfg.update_epochs):
@@ -324,59 +304,12 @@ def train(cfg: DictConfig,
             for i in range(0, len(agent.rb), mini_batch_size):
                 batch_indices = indices[i:i + mini_batch_size]
                 batch = agent.rb[batch_indices]
-                _, newlogprob, entropy, newvalue = agent.predict(batch, batch["actions"])
-                logratio = newlogprob - batch["logprobs"]
-                ratio = logratio.exp()
-
-                # advantage normalization
-                mb_advantages = advantages[batch_indices]
-                if cfg.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-                # policy loss (clipped objective)
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - cfg.clip_coef, 1 + cfg.clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                # value loss clipping
-                if cfg.clip_vloss:
-                    v_loss_unclipped = (newvalue - returns[batch_indices]) ** 2
-                    v_clipped = batch["values"] + torch.clamp(
-                        newvalue - batch["values"],
-                        -cfg.clip_coef,
-                        cfg.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - returns[batch_indices]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - returns[batch_indices]) ** 2).mean()
-
-                # entropy loss
-                entropy_loss = entropy.mean()
-                loss = pg_loss - cfg.ent_coef * entropy_loss + v_loss * cfg.vf_coef
-
-                agent.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(agent.actor.parameters(), cfg.max_grad_norm)
-                torch.nn.utils.clip_grad_norm_(agent.qnet.parameters(), cfg.max_grad_norm)
-                agent.optimizer.step()
-
+                tlog.update(tc_update_nets(batch))
         agent.rb.empty()
-
-        # # update qnets
-        # tlog.update(tc_update_qnets(batch))
-        # agent.qnet_updates_so_far += 1
-
-        # # update actor (and alpha)
-        # if i % (cfg.actor_update_delay + 1) == 0:  # eval freq even number
-        #     # compensate for delay: wait X rounds, do X updates
-        #     for _ in range(cfg.actor_update_delay):
-        #         tlog.update(tc_update_actor(batch))
-        #         agent.actor_updates_so_far += 1
-
-        # # update the target networks
-        # agent.update_targ_nets()
+        
+        y_pred, y_true = agent.rb["values"].cpu().numpy(), agent.rb["returns"].cpu().numpy()
+        var_y = np.var(y_true)
+        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
         if agent.timesteps_so_far % cfg.eval_every == 0:
             logger.info(("eval").upper())
@@ -410,7 +343,9 @@ def train(cfg: DictConfig,
                 {
                     **tlog.to_dict(),
                     **{f"eval/{k}": v for k, v in eval_metrics.items()},
+                    "losses/explained_variance": explained_var,
                     "vitals/replay_buffer_numel": len(agent.rb),
+                    "vitals/learning_rate": agent.optimizer.param_groups[0]["lr"],
                 },
                 step=agent.timesteps_so_far,
             )
@@ -432,7 +367,7 @@ def train(cfg: DictConfig,
                     step=agent.timesteps_so_far,
                 )
 
-        i += 1
+        lr_updates += 1
         tlog.clear()
 
     # save once we are done
