@@ -8,10 +8,7 @@ import wandb
 import numpy as np
 import torch
 from torch.optim.adam import Adam
-from torch.nn import functional as ff
-from torch.nn.utils import clip_grad
 from tensordict import TensorDict
-from tensordict.nn import TensorDictModule
 from torchrl.data import ReplayBuffer
 
 from helpers import logger
@@ -185,7 +182,7 @@ class OnPolicyAgent(object):
                 nextvalue = self.rb["values"][t]
             returns = advantages + self.rb["values"]
         else:
-            returns = torch.zeros_like(self.rb["rewards"]).to(self.hps.device)
+            returns = torch.zeros_like(self.rb["rewards"])
             for t in envs_indices:
                 nextnonterminal = ~self.rb["terminations"][t]
                 next_return = nextvalue
@@ -207,8 +204,8 @@ class OnPolicyAgent(object):
     @beartype
     def update_nets(self, batch: TensorDict) -> TensorDict:
         
-        _, newlogprob, entropy, newvalue = self.predict(batch, batch["actions"])
-        logratio = newlogprob - batch["logprobs"]
+        _, newlogprobs, entropies, newvalue = self.predict(batch, batch["actions"])
+        logratio = newlogprobs - batch["logprobs"]
         ratio = logratio.exp()
 
         with torch.no_grad():
@@ -218,6 +215,7 @@ class OnPolicyAgent(object):
 
         # advantage normalization
         mb_advantages = batch["advantages"]
+        mb_advantages_mean = mb_advantages.mean()
         if self.hps.norm_adv:
             mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
@@ -227,21 +225,22 @@ class OnPolicyAgent(object):
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
         # value loss clipping
+        mb_returns = batch["returns"]
         if self.hps.clip_vloss:
-            v_loss_unclipped = (newvalue - batch["returns"]) ** 2
+            v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_clipped = batch["values"] + torch.clamp(
                 newvalue - batch["values"],
                 -self.hps.clip_coef,
                 self.hps.clip_coef,
             )
-            v_loss_clipped = (v_clipped - batch["returns"]) ** 2
+            v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
             v_loss = 0.5 * v_loss_max.mean()
         else:
-            v_loss = 0.5 * ((newvalue - batch["returns"]) ** 2).mean()
+            v_loss = 0.5 * ((newvalue - mb_returns) ** 2).mean()
 
         # entropy loss
-        entropy_loss = entropy.mean()
+        entropy_loss = entropies.mean()
         loss = pg_loss - self.hps.ent_coef * entropy_loss + v_loss * self.hps.vf_coef
 
         self.optimizer.zero_grad()
@@ -253,11 +252,13 @@ class OnPolicyAgent(object):
 
         return TensorDict(
             {
-                "loss/policy_loss": pg_loss.detach(),
-                "loss/value_loss": v_loss.detach(),
-                "loss/entropy_loss": entropy_loss.detach(),
-                "loss/loss": loss.detach(),
-                "loss/old_approx_kl": old_approx_kl.detach(),
-                "loss/approx_kl": approx_kl.detach(),
+                "debug/mean_advantage": mb_advantages_mean,
+                "debug/mean_return": mb_returns.mean(),
+                "losses/policy_loss": pg_loss.detach(),
+                "losses/value_loss": v_loss.detach(),
+                "losses/entropy_loss": entropy_loss.detach(),
+                "losses/loss": loss.detach(),
+                "losses/old_approx_kl": old_approx_kl.detach(),
+                "losses/approx_kl": approx_kl.detach(),
             },
         )

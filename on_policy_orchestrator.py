@@ -16,7 +16,6 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 from tensordict.nn import CudaGraphModule
-from torchrl.data import ReplayBuffer
 
 from gymnasium.core import Env
 from gymnasium.vector.vector_env import VectorEnv

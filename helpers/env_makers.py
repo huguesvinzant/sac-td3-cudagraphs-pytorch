@@ -224,7 +224,7 @@ def make_env(env_id: str,
                     env = TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
                 if normalize_reward:
                     env = NormalizeReward(env)
-                    env = TransformReward(env, lambda obs: np.clip(obs, -10, 10))
+                    env = TransformReward(env, lambda reward: np.clip(reward, -10, 10))
                 if horizon is not None:
                     env = TimeLimit(env, max_episode_steps=horizon)
             return env
