@@ -170,12 +170,12 @@ class OnPolicyAgent(object):
     @beartype
     def advantage_estimation(self):
         """Compute the advantage estimation and store it in the replay buffer"""
-        envs_indices = [list(range(k, k + self.hps.num_envs)) for k in range(self.hps.segment_len * self.hps.num_envs - self.hps.num_envs, -1, -self.hps.num_envs)]
+        # envs_indices = [list(range(k, k + self.hps.num_envs)) for k in range(self.hps.segment_len * self.hps.num_envs - self.hps.num_envs, -1, -self.hps.num_envs)]
         nextvalue = self.qnet(self.rb["next_observations"][-1]).reshape(-1, 1)
         if self.hps.gae:
             advantages = torch.zeros_like(self.rb["rewards"])
             lastgaelam = 0
-            for t in envs_indices:
+            for t in reversed(range(self.hps.segment_len * self.hps.num_envs)):
                 nextnonterminal = ~self.rb["terminations"][t]
                 delta = self.rb["rewards"][t] + self.hps.gamma * nextvalue * nextnonterminal - self.rb["values"][t]
                 advantages[t] = lastgaelam = delta + self.hps.gamma * self.hps.gae_lambda * nextnonterminal * lastgaelam
@@ -183,23 +183,15 @@ class OnPolicyAgent(object):
             returns = advantages + self.rb["values"]
         else:
             returns = torch.zeros_like(self.rb["rewards"])
-            for t in envs_indices:
+            for t in reversed(range(self.hps.segment_len * self.hps.num_envs)):
                 nextnonterminal = ~self.rb["terminations"][t]
                 next_return = nextvalue
                 returns[t] = self.rb["rewards"][t] + self.hps.gamma * nextnonterminal * next_return
                 nextvalue = returns[t]
             advantages = returns - self.rb["values"]
 
-        self.rb.extend(
-            TensorDict(
-                {
-                    "advantages": advantages,
-                    "returns": returns,
-                },
-                batch_size=advantages.shape[0],
-                device=self.device,
-            )
-        )
+        self.rb.storage.set("advantages", advantages.reshape(-1))
+        self.rb.storage.set("returns", returns.reshape(-1))
 
     @beartype
     def update_nets(self, batch: TensorDict) -> TensorDict:
@@ -215,7 +207,6 @@ class OnPolicyAgent(object):
 
         # advantage normalization
         mb_advantages = batch["advantages"]
-        mb_advantages_mean = mb_advantages.mean()
         if self.hps.norm_adv:
             mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
@@ -252,8 +243,6 @@ class OnPolicyAgent(object):
 
         return TensorDict(
             {
-                "debug/mean_advantage": mb_advantages_mean,
-                "debug/mean_return": mb_returns.mean(),
                 "losses/policy_loss": pg_loss.detach(),
                 "losses/value_loss": v_loss.detach(),
                 "losses/entropy_loss": entropy_loss.detach(),

@@ -15,11 +15,11 @@ normalize_observations: true
 normalize_reward: true
 
 # logging
-wandb_project: "calico" # the wandb's project name
+wandb_project: "PPO_debug" # the wandb's project name
 measure_burnin: 3
 
 # training mode
-num_timesteps: 10000000 # total timesteps of the experiments
+num_timesteps: 2000000 # total timesteps of the experiments
 eval_steps: 10
 eval_every: 2048
 update_epochs: 10 # the K epochs to update the policy
@@ -49,4 +49,4 @@ ent_coef: 0.0 # coefficient of the entropy
 vf_coef: 0.5 # coefficient of the value function
 max_grad_norm: 0.5 # the maximum norm for the gradient clipping
 target_KL: None # the target KL divergence threshold
-rb_capacity: 1000000
+rb_capacity: 2048
