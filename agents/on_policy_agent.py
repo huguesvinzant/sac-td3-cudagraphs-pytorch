@@ -168,30 +168,29 @@ class OnPolicyAgent(object):
             logger.warn("model loaded")
 
     @beartype
-    def advantage_estimation(self):
+    def advantage_estimation(self, next_obs, rewards, terminations, values):
         """Compute the advantage estimation and store it in the replay buffer"""
-        # envs_indices = [list(range(k, k + self.hps.num_envs)) for k in range(self.hps.segment_len * self.hps.num_envs - self.hps.num_envs, -1, -self.hps.num_envs)]
-        nextvalue = self.qnet(self.rb["next_observations"][-1]).reshape(-1, 1)
-        if self.hps.gae:
-            advantages = torch.zeros_like(self.rb["rewards"])
-            lastgaelam = 0
-            for t in reversed(range(self.hps.segment_len * self.hps.num_envs)):
-                nextnonterminal = ~self.rb["terminations"][t]
-                delta = self.rb["rewards"][t] + self.hps.gamma * nextvalue * nextnonterminal - self.rb["values"][t]
-                advantages[t] = lastgaelam = delta + self.hps.gamma * self.hps.gae_lambda * nextnonterminal * lastgaelam
-                nextvalue = self.rb["values"][t]
-            returns = advantages + self.rb["values"]
-        else:
-            returns = torch.zeros_like(self.rb["rewards"])
-            for t in reversed(range(self.hps.segment_len * self.hps.num_envs)):
-                nextnonterminal = ~self.rb["terminations"][t]
-                next_return = nextvalue
-                returns[t] = self.rb["rewards"][t] + self.hps.gamma * nextnonterminal * next_return
-                nextvalue = returns[t]
-            advantages = returns - self.rb["values"]
+        with torch.no_grad():
+            nextvalue = self.qnet(next_obs[-1]).flatten()
+            if self.hps.gae:
+                advantages = torch.zeros_like(rewards)
+                lastgaelam = 0
+                for t in reversed(range(self.hps.segment_len)):
+                    nextnonterminal = 1.0 - terminations[t]
+                    delta = rewards[t] + self.hps.gamma * nextvalue * nextnonterminal - values[t]
+                    advantages[t] = lastgaelam = delta + self.hps.gamma * self.hps.gae_lambda * nextnonterminal * lastgaelam
+                    nextvalue = values[t]
+                returns = advantages + values
+            else:
+                returns = torch.zeros_like(rewards)
+                for t in reversed(range(self.hps.segment_len)):
+                    nextnonterminal = 1.0 - terminations[t]
+                    next_return = nextvalue
+                    returns[t] = rewards[t] + self.hps.gamma * nextnonterminal * next_return
+                    nextvalue = returns[t]
+                advantages = returns - values
 
-        self.rb.storage.set("advantages", advantages.reshape(-1))
-        self.rb.storage.set("returns", returns.reshape(-1))
+            return advantages, returns
 
     @beartype
     def update_nets(self, batch: TensorDict) -> TensorDict:
@@ -201,8 +200,6 @@ class OnPolicyAgent(object):
         ratio = logratio.exp()
 
         with torch.no_grad():
-            # calculate approx_kl http://joschu.net/blog/kl-approx.html
-            old_approx_kl = (-logratio).mean()
             approx_kl = ((ratio - 1) - logratio).mean()
 
         # advantage normalization
@@ -217,13 +214,10 @@ class OnPolicyAgent(object):
 
         # value loss clipping
         mb_returns = batch["returns"]
+        newvalue = newvalue.flatten()
         if self.hps.clip_vloss:
             v_loss_unclipped = (newvalue - mb_returns) ** 2
-            v_clipped = batch["values"] + torch.clamp(
-                newvalue - batch["values"],
-                -self.hps.clip_coef,
-                self.hps.clip_coef,
-            )
+            v_clipped = batch["values"] + torch.clamp(newvalue - batch["values"], -self.hps.clip_coef, self.hps.clip_coef)
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
             v_loss = 0.5 * v_loss_max.mean()
@@ -243,11 +237,11 @@ class OnPolicyAgent(object):
 
         return TensorDict(
             {
-                "losses/policy_loss": pg_loss.detach(),
-                "losses/value_loss": v_loss.detach(),
-                "losses/entropy_loss": entropy_loss.detach(),
-                "losses/loss": loss.detach(),
-                "losses/old_approx_kl": old_approx_kl.detach(),
-                "losses/approx_kl": approx_kl.detach(),
+                "policy_loss": pg_loss.detach(),
+                "value_loss": v_loss.detach(),
+                "entropy_loss": entropy_loss.detach(),
+                "loss": loss.detach(),
+                "approx_kl": approx_kl.detach(),
             },
         )
+            

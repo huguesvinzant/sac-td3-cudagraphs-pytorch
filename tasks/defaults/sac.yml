@@ -12,13 +12,14 @@ num_envs: 8
 action_repeat: 1
 capture_video: false
 normalize_observations: false
+normalize_reward: false
 
 # logging
-wandb_project: "calico"
+wandb_project: "PPO_debug"
 measure_burnin: 3
 
 # training mode
-num_timesteps: 10000000
+num_timesteps: 2000000
 learning_starts: 5000
 eval_steps: 10
 eval_every: 10000

@@ -47,66 +47,82 @@ def segment(env: Union[Env, VectorEnv],
 
     assert agent.rb is not None
 
-    obs, _ = env.reset(seed=seed)  # for the very first reset, we give a seed (and never again)
-    obs = torch.as_tensor(obs, device=agent.device, dtype=torch.float)
-    actions = None  # as long as r is init at 0: ac will be written over
+    obs = torch.zeros((agent.hps.segment_len, agent.hps.num_envs) + env.single_observation_space.shape).to(agent.device)
+    next_obs = torch.zeros((agent.hps.segment_len, agent.hps.num_envs) + env.single_observation_space.shape).to(agent.device)
+    actions = torch.zeros((agent.hps.segment_len, agent.hps.num_envs) + env.single_action_space.shape).to(agent.device)
+    logprobs = torch.zeros((agent.hps.segment_len, agent.hps.num_envs)).to(agent.device)
+    rewards = torch.zeros((agent.hps.segment_len, agent.hps.num_envs)).to(agent.device)
+    terminations = torch.zeros((agent.hps.segment_len, agent.hps.num_envs)).to(agent.device)
+    values = torch.zeros((agent.hps.segment_len, agent.hps.num_envs)).to(agent.device)
+
+    ob, _ = env.reset(seed=seed)  # for the very first reset, we give a seed (and never again)
+    ob = torch.as_tensor(ob, device=agent.device, dtype=torch.float)
+    action = None  # as long as r is init at 0: ac will be written over
 
     t = 0
 
     while True:
         with torch.no_grad():
             # predict action
-            actions, log_probs, _, q_values = agent.predict(
+            action, logprob, _, q_value = agent.predict(
                 TensorDict(
                     {
-                        "observations": obs,
+                        "observations": ob,
                     },
                     device=agent.device,
                 ),
             )
 
         # interact with env
-        next_obs, rewards, terminations, truncations, infos = env.step(actions.cpu().numpy())
+        next_ob, reward, termination, truncation, infos = env.step(action.cpu().numpy())
 
-        next_obs = torch.as_tensor(next_obs, device=agent.device, dtype=torch.float)
-        real_next_obs = next_obs.clone()
+        next_ob = torch.as_tensor(next_ob, device=agent.device, dtype=torch.float)
+        real_next_ob = next_ob.clone()
 
-        for idx, trunc in enumerate(np.array(truncations)):
+        for idx, trunc in enumerate(np.array(truncation)):
             if trunc:
-                real_next_obs[idx] = torch.as_tensor(
+                real_next_ob[idx] = torch.as_tensor(
                     infos["final_observation"][idx], device=agent.device, dtype=torch.float)
 
-        rewards = rearrange(
-            torch.as_tensor(rewards, device=agent.device, dtype=torch.float),
-            "b -> b 1",
-        )
-        terminations = rearrange(
-            torch.as_tensor(terminations, device=agent.device, dtype=torch.bool),
-            "b -> b 1",
-        )
+        reward = torch.as_tensor(reward, device=agent.device, dtype=torch.float)
+        termination = torch.as_tensor(termination, device=agent.device, dtype=torch.bool)
 
-        agent.rb.extend(
-            TensorDict(
-                {
-                    "observations": obs,
-                    "next_observations": real_next_obs,
-                    "actions": torch.as_tensor(actions, device=agent.device, dtype=torch.float),
-                    "rewards": torch.as_tensor(rewards, device=agent.device, dtype=torch.float),
-                    "terminations": terminations,
-                    "logprobs": log_probs,
-                    "values": q_values,
-                },
-                batch_size=obs.shape[0],
-                device=agent.device,
-            ),
-        )
+        obs[t] = ob
+        next_obs[t] = next_ob
+        actions[t] = action
+        rewards[t] = reward
+        terminations[t] = termination
+        logprobs[t] = logprob
+        values[t] = q_value.flatten()
 
-        obs = next_obs
+        if t > 0 and t % (segment_len-1) == 0:
+            t = 0
+            # advantage estimation
+            advantages, returns = agent.advantage_estimation(next_obs, rewards, terminations, values)
 
-        t += 1
-
-        if t > 0 and t % segment_len == 0:
+            agent.rb.extend(
+                TensorDict(
+                    {
+                        "observations": obs.reshape((-1,) + env.single_observation_space.shape),
+                        "next_observations": next_obs.reshape((-1,) + env.single_observation_space.shape),
+                        "actions": actions.reshape((-1,) + env.single_action_space.shape),
+                        "rewards": rewards.reshape(-1),
+                        "terminations": terminations.reshape(-1),
+                        "logprobs": logprobs.reshape(-1),
+                        "values": values.reshape(-1),
+                        "advantages": advantages.reshape(-1),
+                        "returns": returns.reshape(-1),
+                    },
+                    batch_size=agent.hps.segment_len*agent.hps.num_envs,
+                    device=agent.device,
+                ),
+            )
+            
             yield
+
+        else:
+            ob = next_ob
+            t += 1
 
 
 @beartype
@@ -292,18 +308,50 @@ def train(cfg: DictConfig,
 
         logger.info(("train").upper())
 
-        # advantage estimation
-        with torch.no_grad():
-            agent.advantage_estimation()
-
         # minibatch update
+
+        # Initialize accumulators for losses
+        policy_losses = torch.zeros(cfg.update_epochs, cfg.num_minibatches, device=agent.device)
+        value_losses = torch.zeros(cfg.update_epochs, cfg.num_minibatches, device=agent.device)
+        entropy_losses = torch.zeros(cfg.update_epochs, cfg.num_minibatches, device=agent.device)
+        total_losses = torch.zeros(cfg.update_epochs, cfg.num_minibatches, device=agent.device)
+        approx_kls = torch.zeros(cfg.update_epochs, cfg.num_minibatches, device=agent.device)
+
         mini_batch_size = cfg.segment_len * cfg.num_envs // cfg.num_minibatches
         for epoch in range(cfg.update_epochs):
             indices = torch.randperm(len((agent.rb)))
-            for i in range(0, len(agent.rb), mini_batch_size):
+            for j, i in enumerate(range(0, len(agent.rb), mini_batch_size)):
                 batch_indices = indices[i:i + mini_batch_size]
                 batch = agent.rb[batch_indices]
-                tlog.update(tc_update_nets(batch))
+                losses = tc_update_nets(batch)
+
+                # Store values in accumulators
+                policy_losses[epoch, j] = losses["policy_loss"]
+                value_losses[epoch, j] = losses["value_loss"]
+                entropy_losses[epoch, j] = losses["entropy_loss"]
+                total_losses[epoch, j] = losses["loss"]
+                approx_kls[epoch, j] = losses["approx_kl"]
+                # tlog.update(tc_update_nets(batch))
+
+        # Compute the mean for each loss type across all epochs and mini-batches
+        mean_policy_loss = policy_losses.mean()
+        mean_value_loss = value_losses.mean()
+        mean_entropy_loss = entropy_losses.mean()
+        mean_loss = total_losses.mean()
+        mean_approx_kl = approx_kls.mean()
+
+        # Output as a TensorDict
+        tlog.update(TensorDict(
+            {
+                "losses/policy_loss": mean_policy_loss,
+                "losses/value_loss": mean_value_loss,
+                "losses/entropy_loss": mean_entropy_loss,
+                "losses/loss": mean_loss,
+                "losses/approx_kl": mean_approx_kl,
+            },
+            batch_size=[],
+            device=agent.device,
+        ))
         agent.rb.empty()
         
         y_pred, y_true = agent.rb["values"].cpu().numpy(), agent.rb["returns"].cpu().numpy()
